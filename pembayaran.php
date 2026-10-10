@@ -7,6 +7,21 @@ $db = (new Database())->getConnection();
 $message = '';
 $message_type = '';
 
+function e($value) {
+    return htmlspecialchars((string) ($value ?? ''), ENT_QUOTES, 'UTF-8');
+}
+
+/* Notifikasi */
+if (isset($_GET['msg'])) {
+    if ($_GET['msg'] === 'hapus') {
+        $message = 'Data pembayaran berhasil dihapus.';
+        $message_type = 'success';
+    } elseif ($_GET['msg'] === 'simpan') {
+        $message = 'Data pembayaran berhasil disimpan.';
+        $message_type = 'success';
+    }
+}
+
 /* Hapus pembayaran */
 if (isset($_GET['hapus'])) {
     try {
@@ -16,82 +31,201 @@ if (isset($_GET['hapus'])) {
         header('Location: pembayaran.php?msg=hapus');
         exit;
     } catch (PDOException $e) {
-        $message = 'Pembayaran tidak dapat dihapus.';
+        $message = 'Pembayaran tidak dapat dihapus karena masih digunakan.';
         $message_type = 'error';
     }
-}
-
-if (isset($_GET['msg']) && $_GET['msg'] === 'hapus') {
-    $message = 'Data pembayaran berhasil dihapus.';
-    $message_type = 'success';
 }
 
 /* Simpan pembayaran */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $id = (int) ($_POST['id'] ?? 0);
     $kunjungan_id = (int) ($_POST['kunjungan_id'] ?? 0);
-    $tanggal_pembayaran = $_POST['tanggal_pembayaran'] ?? date('Y-m-d');
-    $metode_pembayaran = trim($_POST['metode_pembayaran'] ?? '');
-    $total_tagihan = (float) ($_POST['total_tagihan'] ?? 0);
-    $jumlah_bayar = (float) ($_POST['jumlah_bayar'] ?? 0);
+
+    $biaya_pendaftaran = max(0, (float) ($_POST['biaya_pendaftaran'] ?? 0));
+    $biaya_konsultasi = max(0, (float) ($_POST['biaya_konsultasi'] ?? 0));
+    $biaya_tindakan = max(0, (float) ($_POST['biaya_tindakan'] ?? 0));
+    $biaya_obat = max(0, (float) ($_POST['biaya_obat'] ?? 0));
+    $diskon = max(0, (float) ($_POST['diskon'] ?? 0));
+    $pajak = max(0, (float) ($_POST['pajak'] ?? 0));
+
+    $total_tagihan = max(
+        0,
+        $biaya_pendaftaran + $biaya_konsultasi +
+        $biaya_tindakan + $biaya_obat - $diskon + $pajak
+    );
+
+    $total_bayar = max(0, (float) ($_POST['total_bayar'] ?? 0));
+    $kembalian = max(0, $total_bayar - $total_tagihan);
+
+    $metode_pembayaran = $_POST['metode_pembayaran'] ?? 'tunai';
     $status = $_POST['status'] ?? 'belum_bayar';
-    $keterangan = trim($_POST['keterangan'] ?? '');
+    $catatan = trim($_POST['catatan'] ?? '');
 
-    $status_valid = ['belum_bayar', 'sebagian', 'lunas'];
-    $metode_valid = ['tunai', 'transfer', 'debit', 'qris'];
+    $metode_valid = ['tunai', 'debit', 'kredit', 'transfer', 'qris'];
+    $status_valid = ['belum_bayar', 'sebagian', 'lunas', 'batal'];
 
-    if ($kunjungan_id <= 0 || $total_tagihan < 0 || $jumlah_bayar < 0) {
-        $message = 'Kunjungan dan jumlah pembayaran harus valid.';
+    if ($kunjungan_id <= 0) {
+        $message = 'Kunjungan pasien wajib dipilih.';
         $message_type = 'error';
-    } elseif (!in_array($status, $status_valid, true)
-        || !in_array($metode_pembayaran, $metode_valid, true)) {
+    } elseif (!in_array($metode_pembayaran, $metode_valid, true)
+        || !in_array($status, $status_valid, true)) {
         $message = 'Metode atau status pembayaran tidak valid.';
+        $message_type = 'error';
+    } elseif ($diskon > (
+        $biaya_pendaftaran + $biaya_konsultasi +
+        $biaya_tindakan + $biaya_obat
+    )) {
+        $message = 'Diskon tidak boleh melebihi total biaya sebelum pajak.';
+        $message_type = 'error';
+    } elseif ($status === 'lunas' && $total_bayar < $total_tagihan) {
+        $message = 'Status lunas membutuhkan jumlah bayar minimal sebesar total tagihan.';
+        $message_type = 'error';
+    } elseif ($status === 'sebagian' &&
+        ($total_bayar <= 0 || $total_bayar >= $total_tagihan)) {
+        $message = 'Status sebagian harus memiliki pembayaran di atas Rp0 dan masih kurang dari total tagihan.';
+        $message_type = 'error';
+    } elseif ($status === 'belum_bayar' && $total_bayar > 0) {
+        $message = 'Untuk status belum bayar, jumlah bayar harus Rp0.';
         $message_type = 'error';
     } else {
         try {
+            /* Ambil pasien berdasarkan kunjungan */
+            $stmt = $db->prepare(
+                "SELECT pasien_id FROM kunjungan WHERE id = ?"
+            );
+            $stmt->execute([$kunjungan_id]);
+            $data_kunjungan = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$data_kunjungan) {
+                throw new RuntimeException('Kunjungan tidak ditemukan.');
+            }
+
+            $pasien_id = (int) $data_kunjungan['pasien_id'];
+
+            /* Nomor pembayaran dibuat otomatis */
+            if ($id > 0) {
+                $stmt = $db->prepare(
+                    "SELECT no_pembayaran FROM pembayaran WHERE id = ?"
+                );
+                $stmt->execute([$id]);
+                $data_lama = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$data_lama) {
+                    throw new RuntimeException('Data pembayaran tidak ditemukan.');
+                }
+
+                $no_pembayaran = $data_lama['no_pembayaran'];
+            } else {
+                $no_pembayaran = 'BYR-' . date('YmdHis') . '-' .
+                    strtoupper(bin2hex(random_bytes(2)));
+            }
+
+            /* Ambil user yang sedang login jika tersedia */
+            $user_id = $_SESSION['user_id'] ?? null;
+
             if ($id > 0) {
                 $sql = "UPDATE pembayaran SET
-                        kunjungan_id = ?, tanggal_pembayaran = ?,
-                        metode_pembayaran = ?, total_tagihan = ?,
-                        jumlah_bayar = ?, status = ?, keterangan = ?
-                        WHERE id = ?";
+                    no_pembayaran = ?,
+                    kunjungan_id = ?,
+                    pasien_id = ?,
+                    user_id = ?,
+                    tanggal_pembayaran = NOW(),
+                    biaya_pendaftaran = ?,
+                    biaya_konsultasi = ?,
+                    biaya_tindakan = ?,
+                    biaya_obat = ?,
+                    diskon = ?,
+                    pajak = ?,
+                    total_tagihan = ?,
+                    total_bayar = ?,
+                    kembalian = ?,
+                    metode_pembayaran = ?,
+                    status = ?,
+                    catatan = ?
+                    WHERE id = ?";
+
                 $stmt = $db->prepare($sql);
                 $stmt->execute([
-                    $kunjungan_id, $tanggal_pembayaran,
-                    $metode_pembayaran, $total_tagihan,
-                    $jumlah_bayar, $status, $keterangan ?: null, $id
+                    $no_pembayaran,
+                    $kunjungan_id,
+                    $pasien_id,
+                    $user_id,
+                    $biaya_pendaftaran,
+                    $biaya_konsultasi,
+                    $biaya_tindakan,
+                    $biaya_obat,
+                    $diskon,
+                    $pajak,
+                    $total_tagihan,
+                    $total_bayar,
+                    $kembalian,
+                    $metode_pembayaran,
+                    $status,
+                    $catatan !== '' ? $catatan : null,
+                    $id
                 ]);
             } else {
-                $sql = "INSERT INTO pembayaran
-                        (kunjungan_id, tanggal_pembayaran,
-                         metode_pembayaran, total_tagihan,
-                         jumlah_bayar, status, keterangan)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)";
+                $sql = "INSERT INTO pembayaran (
+                    no_pembayaran,
+                    kunjungan_id,
+                    pasien_id,
+                    user_id,
+                    tanggal_pembayaran,
+                    biaya_pendaftaran,
+                    biaya_konsultasi,
+                    biaya_tindakan,
+                    biaya_obat,
+                    diskon,
+                    pajak,
+                    total_tagihan,
+                    total_bayar,
+                    kembalian,
+                    metode_pembayaran,
+                    status,
+                    catatan
+                ) VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
                 $stmt = $db->prepare($sql);
                 $stmt->execute([
-                    $kunjungan_id, $tanggal_pembayaran,
-                    $metode_pembayaran, $total_tagihan,
-                    $jumlah_bayar, $status, $keterangan ?: null
+                    $no_pembayaran,
+                    $kunjungan_id,
+                    $pasien_id,
+                    $user_id,
+                    $biaya_pendaftaran,
+                    $biaya_konsultasi,
+                    $biaya_tindakan,
+                    $biaya_obat,
+                    $diskon,
+                    $pajak,
+                    $total_tagihan,
+                    $total_bayar,
+                    $kembalian,
+                    $metode_pembayaran,
+                    $status,
+                    $catatan !== '' ? $catatan : null
                 ]);
             }
 
             header('Location: pembayaran.php?msg=simpan');
             exit;
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+            $message_type = 'error';
         } catch (PDOException $e) {
-            $message = 'Gagal menyimpan pembayaran. Periksa struktur tabel database.';
+            $message = 'Gagal menyimpan pembayaran. Periksa relasi tabel dan data yang dimasukkan.';
             $message_type = 'error';
         }
     }
 }
 
-if (isset($_GET['msg']) && $_GET['msg'] === 'simpan') {
-    $message = 'Data pembayaran berhasil disimpan.';
-    $message_type = 'success';
-}
-
-/* Pilihan kunjungan */
+/* Pilihan kunjungan dan pasien */
 $kunjungan = $db->query("
-    SELECT k.id, k.tanggal_kunjungan, p.nama_pasien
+    SELECT
+        k.id,
+        k.no_kunjungan,
+        k.tanggal_kunjungan,
+        k.pasien_id,
+        p.nama_pasien
     FROM kunjungan k
     LEFT JOIN pasien p ON p.id = k.pasien_id
     ORDER BY k.id DESC
@@ -104,14 +238,22 @@ if (isset($_GET['edit'])) {
     $stmt = $db->prepare("SELECT * FROM pembayaran WHERE id = ?");
     $stmt->execute([(int) $_GET['edit']]);
     $edit = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$edit) {
+        $message = 'Data pembayaran tidak ditemukan.';
+        $message_type = 'error';
+    }
 }
 
 /* Daftar pembayaran */
 $pembayaran = $db->query("
-    SELECT b.*, p.nama_pasien
+    SELECT
+        b.*,
+        p.nama_pasien,
+        k.no_kunjungan
     FROM pembayaran b
+    LEFT JOIN pasien p ON p.id = b.pasien_id
     LEFT JOIN kunjungan k ON k.id = b.kunjungan_id
-    LEFT JOIN pasien p ON p.id = k.pasien_id
     ORDER BY b.id DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 ?>
@@ -187,12 +329,18 @@ $pembayaran = $db->query("
         }
         .pay-page .success { background: #dcfce7; color: #166534; }
         .pay-page .error { background: #fee2e2; color: #991b1b; }
-
+        .pay-page .total-box {
+            background: #eff6ff;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+        }
         @media (max-width: 768px) {
             .pay-page .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (max-width: 480px) {
             .pay-page .form-grid { grid-template-columns: 1fr; }
+            .pay-page .full { grid-column: auto; }
         }
     </style>
 </head>
@@ -211,7 +359,7 @@ $pembayaran = $db->query("
 
         <?php if ($message): ?>
             <div class="alert <?= $message_type === 'success' ? 'success' : 'error' ?>">
-                <?= htmlspecialchars($message) ?>
+                <?= e($message) ?>
             </div>
         <?php endif; ?>
 
@@ -223,27 +371,64 @@ $pembayaran = $db->query("
                        value="<?= (int) ($edit['id'] ?? 0) ?>">
 
                 <div class="form-grid">
-                    <div class="form-group">
+                    <div class="form-group full">
                         <label>Kunjungan / Pasien *</label>
                         <select name="kunjungan_id" required>
                             <option value="">Pilih kunjungan</option>
                             <?php foreach ($kunjungan as $k): ?>
                                 <option value="<?= (int) $k['id'] ?>"
                                     <?= (string) ($edit['kunjungan_id'] ?? '') === (string) $k['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars(
-                                        'Kunjungan #' . $k['id'] . ' - ' .
-                                        ($k['nama_pasien'] ?? 'Pasien') . ' (' .
-                                        ($k['tanggal_kunjungan'] ?? '-') . ')'
+                                    <?= e(
+                                        ($k['no_kunjungan'] ?? 'Kunjungan #' . $k['id']) .
+                                        ' - ' . ($k['nama_pasien'] ?? 'Pasien') .
+                                        ' (' . ($k['tanggal_kunjungan'] ?? '-') . ')'
                                     ) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
 
+                    <?php
+                    $biaya_fields = [
+                        'biaya_pendaftaran' => 'Biaya Pendaftaran',
+                        'biaya_konsultasi' => 'Biaya Konsultasi',
+                        'biaya_tindakan' => 'Biaya Tindakan',
+                        'biaya_obat' => 'Biaya Obat',
+                        'diskon' => 'Diskon',
+                        'pajak' => 'Pajak'
+                    ];
+                    foreach ($biaya_fields as $field => $label):
+                    ?>
+                        <div class="form-group">
+                            <label><?= e($label) ?> (Rp)</label>
+                            <input type="number"
+                                   name="<?= e($field) ?>"
+                                   class="biaya"
+                                   min="0"
+                                   step="0.01"
+                                   value="<?= e($edit[$field] ?? '0') ?>">
+                        </div>
+                    <?php endforeach; ?>
+
                     <div class="form-group">
-                        <label>Tanggal Pembayaran *</label>
-                        <input type="date" name="tanggal_pembayaran" required
-                               value="<?= htmlspecialchars($edit['tanggal_pembayaran'] ?? date('Y-m-d')) ?>">
+                        <label>Total Tagihan (Rp)</label>
+                        <input type="number" id="total_tagihan" name="total_tagihan_tampilan"
+                               min="0" step="0.01"
+                               value="<?= e($edit['total_tagihan'] ?? '0') ?>"
+                               readonly>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Jumlah Dibayar (Rp) *</label>
+                        <input type="number" name="total_bayar" id="total_bayar"
+                               min="0" step="0.01" required
+                               value="<?= e($edit['total_bayar'] ?? '0') ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Kembalian (Rp)</label>
+                        <input type="number" id="kembalian" readonly
+                               value="<?= e($edit['kembalian'] ?? '0') ?>">
                     </div>
 
                     <div class="form-group">
@@ -252,31 +437,19 @@ $pembayaran = $db->query("
                             <?php
                             $metode = [
                                 'tunai' => 'Tunai',
-                                'transfer' => 'Transfer',
                                 'debit' => 'Debit',
+                                'kredit' => 'Kredit',
+                                'transfer' => 'Transfer',
                                 'qris' => 'QRIS'
                             ];
                             ?>
-                            <option value="">Pilih metode</option>
                             <?php foreach ($metode as $value => $label): ?>
-                                <option value="<?= $value ?>"
-                                    <?= ($edit['metode_pembayaran'] ?? '') === $value ? 'selected' : '' ?>>
-                                    <?= $label ?>
+                                <option value="<?= e($value) ?>"
+                                    <?= ($edit['metode_pembayaran'] ?? 'tunai') === $value ? 'selected' : '' ?>>
+                                    <?= e($label) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Total Tagihan (Rp) *</label>
-                        <input type="number" name="total_tagihan" min="0" step="0.01"
-                               required value="<?= htmlspecialchars((string) ($edit['total_tagihan'] ?? '0')) ?>">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Jumlah Dibayar (Rp) *</label>
-                        <input type="number" name="jumlah_bayar" min="0" step="0.01"
-                               required value="<?= htmlspecialchars((string) ($edit['jumlah_bayar'] ?? '0')) ?>">
                     </div>
 
                     <div class="form-group">
@@ -286,21 +459,22 @@ $pembayaran = $db->query("
                             $status_list = [
                                 'belum_bayar' => 'Belum Bayar',
                                 'sebagian' => 'Sebagian',
-                                'lunas' => 'Lunas'
+                                'lunas' => 'Lunas',
+                                'batal' => 'Batal'
                             ];
                             ?>
                             <?php foreach ($status_list as $value => $label): ?>
-                                <option value="<?= $value ?>"
+                                <option value="<?= e($value) ?>"
                                     <?= ($edit['status'] ?? 'belum_bayar') === $value ? 'selected' : '' ?>>
-                                    <?= $label ?>
+                                    <?= e($label) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
 
                     <div class="form-group full">
-                        <label>Keterangan</label>
-                        <textarea name="keterangan"><?= htmlspecialchars($edit['keterangan'] ?? '') ?></textarea>
+                        <label>Catatan</label>
+                        <textarea name="catatan"><?= e($edit['catatan'] ?? '') ?></textarea>
                     </div>
                 </div>
 
@@ -324,33 +498,38 @@ $pembayaran = $db->query("
                     <thead>
                         <tr>
                             <th>No.</th>
+                            <th>No. Pembayaran</th>
+                            <th>No. Kunjungan</th>
                             <th>Pasien</th>
                             <th>Tanggal</th>
-                            <th>Metode</th>
                             <th>Total Tagihan</th>
-                            <th>Jumlah Dibayar</th>
-                            <th>Sisa</th>
+                            <th>Total Bayar</th>
+                            <th>Kembalian</th>
+                            <th>Metode</th>
                             <th>Status</th>
                             <th>Aksi</th>
                         </tr>
                     </thead>
                     <tbody>
                     <?php if (!$pembayaran): ?>
-                        <tr><td colspan="9">Belum ada data pembayaran.</td></tr>
+                        <tr><td colspan="11">Belum ada data pembayaran.</td></tr>
                     <?php else: ?>
                         <?php foreach ($pembayaran as $i => $p): ?>
                             <tr>
                                 <td><?= $i + 1 ?></td>
-                                <td><?= htmlspecialchars($p['nama_pasien'] ?? '-') ?></td>
-                                <td><?= htmlspecialchars($p['tanggal_pembayaran'] ?? '-') ?></td>
-                                <td><?= htmlspecialchars(strtoupper($p['metode_pembayaran'] ?? '-')) ?></td>
+                                <td><?= e($p['no_pembayaran']) ?></td>
+                                <td><?= e($p['no_kunjungan'] ?? '-') ?></td>
+                                <td><?= e($p['nama_pasien'] ?? '-') ?></td>
+                                <td><?= e($p['tanggal_pembayaran'] ?? '-') ?></td>
                                 <td>Rp <?= number_format((float) ($p['total_tagihan'] ?? 0), 0, ',', '.') ?></td>
-                                <td>Rp <?= number_format((float) ($p['jumlah_bayar'] ?? 0), 0, ',', '.') ?></td>
-                                <td>Rp <?= number_format(max(0, (float) ($p['total_tagihan'] ?? 0) - (float) ($p['jumlah_bayar'] ?? 0)), 0, ',', '.') ?></td>
-                                <td><?= htmlspecialchars(ucwords(str_replace('_', ' ', $p['status'] ?? '-'))) ?></td>
+                                <td>Rp <?= number_format((float) ($p['total_bayar'] ?? 0), 0, ',', '.') ?></td>
+                                <td>Rp <?= number_format((float) ($p['kembalian'] ?? 0), 0, ',', '.') ?></td>
+                                <td><?= e(strtoupper($p['metode_pembayaran'] ?? '-')) ?></td>
+                                <td><?= e(ucwords(str_replace('_', ' ', $p['status'] ?? '-'))) ?></td>
                                 <td>
                                     <a class="btn edit"
                                        href="pembayaran.php?edit=<?= (int) $p['id'] ?>">Edit</a>
+
                                     <a class="btn delete"
                                        href="pembayaran.php?hapus=<?= (int) $p['id'] ?>"
                                        onclick="return confirm('Yakin ingin menghapus pembayaran ini?')">Hapus</a>
@@ -364,6 +543,42 @@ $pembayaran = $db->query("
         </section>
     </div>
 </main>
+
+<script>
+function hitungTotal() {
+    const biaya = [
+        'biaya_pendaftaran',
+        'biaya_konsultasi',
+        'biaya_tindakan',
+        'biaya_obat'
+    ];
+
+    let subtotal = 0;
+
+    biaya.forEach(function(nama) {
+        const input = document.querySelector('[name="' + nama + '"]');
+        subtotal += Number(input.value) || 0;
+    });
+
+    const diskon = Number(document.querySelector('[name="diskon"]').value) || 0;
+    const pajak = Number(document.querySelector('[name="pajak"]').value) || 0;
+    const total = Math.max(0, subtotal - diskon + pajak);
+
+    document.getElementById('total_tagihan').value = total.toFixed(2);
+
+    const bayar = Number(document.getElementById('total_bayar').value) || 0;
+    document.getElementById('kembalian').value =
+        Math.max(0, bayar - total).toFixed(2);
+}
+
+document.querySelectorAll('.biaya').forEach(function(input) {
+    input.addEventListener('input', hitungTotal);
+});
+
+document.getElementById('total_bayar').addEventListener('input', hitungTotal);
+
+hitungTotal();
+</script>
 
 </body>
 </html>

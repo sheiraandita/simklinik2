@@ -1,4 +1,3 @@
-
 <?php
 require_once __DIR__ . '/config/config.php';
 requireLogin();
@@ -34,71 +33,134 @@ $poliList = $db->query("
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 // Tambah / edit kunjungan
-if ($_SERVER['REQUEST_METHOD'] === 'POST'
-    && ($_POST['action'] ?? '') === 'save') {
-
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'save'
+) {
     $id = (int)($_POST['id'] ?? 0);
     $pasienId = (int)($_POST['pasien_id'] ?? 0);
     $dokterId = (int)($_POST['dokter_id'] ?? 0);
     $poliId = (int)($_POST['poli_id'] ?? 0);
     $tanggal = $_POST['tanggal_kunjungan'] ?? '';
-    $jenis = trim($_POST['jenis_kunjungan'] ?? 'Umum');
+    $jenis = $_POST['jenis_kunjungan'] ?? 'lama';
+    $caraBayar = $_POST['cara_bayar'] ?? 'umum';
+    $noBpjs = trim($_POST['no_bpjs'] ?? '');
     $keluhan = trim($_POST['keluhan'] ?? '');
     $status = $_POST['status'] ?? 'menunggu';
 
-    $allowedStatus = ['menunggu', 'diperiksa', 'selesai', 'batal'];
+    $allowedJenis = ['baru', 'lama'];
+    $allowedCaraBayar = ['umum', 'bpjs', 'asuransi'];
+    $allowedStatus = [
+        'menunggu',
+        'dipanggil',
+        'diperiksa',
+        'selesai',
+        'batal'
+    ];
 
-    if (!$pasienId || !$dokterId || !$poliId || !$tanggal) {
-        $error = 'Pasien, dokter, poli, dan tanggal kunjungan wajib diisi.';
+    if (!$pasienId || !$tanggal) {
+        $error = 'Pasien dan tanggal kunjungan wajib diisi.';
+    } elseif (!in_array($jenis, $allowedJenis, true)) {
+        $error = 'Jenis kunjungan tidak valid.';
+    } elseif (!in_array($caraBayar, $allowedCaraBayar, true)) {
+        $error = 'Cara pembayaran tidak valid.';
     } elseif (!in_array($status, $allowedStatus, true)) {
         $error = 'Status kunjungan tidak valid.';
     } else {
         try {
             if ($id > 0) {
+                // Update kunjungan
                 $stmt = $db->prepare("
                     UPDATE kunjungan
-                    SET pasien_id = ?, dokter_id = ?, poli_id = ?,
-                        tanggal_kunjungan = ?, jenis_kunjungan = ?,
-                        keluhan = ?, status = ?
+                    SET pasien_id = ?,
+                        dokter_id = ?,
+                        poli_id = ?,
+                        tanggal_kunjungan = ?,
+                        jenis_kunjungan = ?,
+                        cara_bayar = ?,
+                        no_bpjs = ?,
+                        keluhan_awal = ?,
+                        status = ?
                     WHERE id = ?
                 ");
 
                 $stmt->execute([
-                    $pasienId, $dokterId, $poliId,
-                    $tanggal, $jenis, $keluhan ?: null,
-                    $status, $id
+                    $pasienId,
+                    $dokterId ?: null,
+                    $poliId ?: null,
+                    $tanggal,
+                    $jenis,
+                    $caraBayar,
+                    $noBpjs !== '' ? $noBpjs : null,
+                    $keluhan !== '' ? $keluhan : null,
+                    $status,
+                    $id
                 ]);
 
                 $success = 'Data kunjungan berhasil diperbarui.';
             } else {
+                // Nomor kunjungan otomatis
+                $noKunjungan = 'KJ-' . date('YmdHis')
+                    . '-' . random_int(100, 999);
+
+                // Simpan kunjungan baru
                 $stmt = $db->prepare("
-                    INSERT INTO kunjungan
-                    (pasien_id, dokter_id, poli_id, tanggal_kunjungan,
-                     jenis_kunjungan, keluhan, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO kunjungan (
+                        no_kunjungan,
+                        pasien_id,
+                        dokter_id,
+                        poli_id,
+                        tanggal_kunjungan,
+                        jenis_kunjungan,
+                        cara_bayar,
+                        no_bpjs,
+                        keluhan_awal,
+                        status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ");
 
                 $stmt->execute([
-                    $pasienId, $dokterId, $poliId,
-                    $tanggal, $jenis, $keluhan ?: null, $status
+                    $noKunjungan,
+                    $pasienId,
+                    $dokterId ?: null,
+                    $poliId ?: null,
+                    $tanggal,
+                    $jenis,
+                    $caraBayar,
+                    $noBpjs !== '' ? $noBpjs : null,
+                    $keluhan !== '' ? $keluhan : null,
+                    $status
                 ]);
 
-                $success = 'Pendaftaran kunjungan berhasil ditambahkan.';
+                $success = 'Pendaftaran kunjungan berhasil ditambahkan. Nomor: '
+                    . $noKunjungan;
             }
         } catch (PDOException $ex) {
-            $error = 'Gagal menyimpan kunjungan. Periksa struktur tabel kunjungan.';
+            error_log('Gagal menyimpan kunjungan: ' . $ex->getMessage());
+            $error = 'Gagal menyimpan kunjungan. Periksa data dan struktur database.';
         }
     }
 }
 
 // Hapus kunjungan
-if ($_SERVER['REQUEST_METHOD'] === 'POST'
-    && ($_POST['action'] ?? '') === 'delete') {
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'delete'
+) {
     try {
-        $stmt = $db->prepare("DELETE FROM kunjungan WHERE id = ?");
-        $stmt->execute([(int)($_POST['id'] ?? 0)]);
+        $stmt = $db->prepare("
+            DELETE FROM kunjungan
+            WHERE id = ?
+        ");
+
+        $stmt->execute([
+            (int)($_POST['id'] ?? 0)
+        ]);
+
         $success = 'Data kunjungan berhasil dihapus.';
     } catch (PDOException $ex) {
+        error_log('Gagal menghapus kunjungan: ' . $ex->getMessage());
         $error = 'Kunjungan tidak dapat dihapus karena sudah terhubung dengan data lain.';
     }
 }
@@ -107,7 +169,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
 $editData = null;
 
 if (isset($_GET['edit'])) {
-    $stmt = $db->prepare("SELECT * FROM kunjungan WHERE id = ?");
+    $stmt = $db->prepare("
+        SELECT *
+        FROM kunjungan
+        WHERE id = ?
+    ");
+
     $stmt->execute([(int)$_GET['edit']]);
     $editData = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
@@ -116,11 +183,12 @@ if (isset($_GET['edit'])) {
 $search = trim($_GET['search'] ?? '');
 
 $sql = "
-    SELECT k.*,
-           p.no_rm,
-           p.nama_pasien,
-           d.nama_dokter,
-           po.nama_poli
+    SELECT
+        k.*,
+        p.no_rm,
+        p.nama_pasien,
+        d.nama_dokter,
+        po.nama_poli
     FROM kunjungan k
     LEFT JOIN pasien p ON p.id = k.pasien_id
     LEFT JOIN dokter d ON d.id = k.dokter_id
@@ -132,6 +200,8 @@ if ($search !== '') {
         WHERE p.nama_pasien LIKE ?
            OR d.nama_dokter LIKE ?
            OR po.nama_poli LIKE ?
+           OR k.no_kunjungan LIKE ?
+           OR p.no_rm LIKE ?
     ";
 }
 
@@ -140,8 +210,14 @@ $sql .= " ORDER BY k.id DESC";
 $stmt = $db->prepare($sql);
 
 if ($search !== '') {
-    $keyword = "%$search%";
-    $stmt->execute([$keyword, $keyword, $keyword]);
+    $keyword = "%{$search}%";
+    $stmt->execute([
+        $keyword,
+        $keyword,
+        $keyword,
+        $keyword,
+        $keyword
+    ]);
 } else {
     $stmt->execute();
 }
@@ -157,6 +233,7 @@ $sidebarCandidates = [
 ];
 
 $sidebarFile = null;
+
 foreach ($sidebarCandidates as $path) {
     if (is_file($path)) {
         $sidebarFile = $path;
@@ -173,7 +250,9 @@ foreach ($sidebarCandidates as $path) {
 <title>Pendaftaran / Kunjungan - SIM Klinik</title>
 
 <style>
-* { box-sizing: border-box; }
+* {
+    box-sizing: border-box;
+}
 
 body {
     margin: 0;
@@ -182,7 +261,10 @@ body {
     color: #25364a;
 }
 
-.main-container { display: flex; min-height: 100vh; }
+.main-container {
+    display: flex;
+    min-height: 100vh;
+}
 
 .sidebar {
     flex: 0 0 250px;
@@ -193,10 +275,25 @@ body {
     color: white;
 }
 
-.sidebar h2 { margin: 0 0 8px; }
-.sidebar p { color: #c8d8e6; font-size: 13px; margin-bottom: 28px; }
-.sidebar ul { list-style: none; padding: 0; margin: 0; }
-.sidebar li { margin: 6px 0; }
+.sidebar h2 {
+    margin: 0 0 8px;
+}
+
+.sidebar p {
+    color: #c8d8e6;
+    font-size: 13px;
+    margin-bottom: 28px;
+}
+
+.sidebar ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.sidebar li {
+    margin: 6px 0;
+}
 
 .sidebar a {
     display: block;
@@ -208,22 +305,45 @@ body {
 }
 
 .sidebar a:hover,
-.sidebar a.active { background: #285a7d; color: white; }
+.sidebar a.active {
+    background: #285a7d;
+    color: white;
+}
 
-.main-content { flex: 1; min-width: 0; padding: 28px; }
-.page-heading { margin-bottom: 24px; }
-.page-heading h1 { margin: 0 0 8px; color: #173b57; }
-.page-heading p { margin: 0; color: #718096; font-size: 14px; }
+.main-content {
+    flex: 1;
+    min-width: 0;
+    padding: 28px;
+}
+
+.page-heading {
+    margin-bottom: 24px;
+}
+
+.page-heading h1 {
+    margin: 0 0 8px;
+    color: #173b57;
+}
+
+.page-heading p {
+    margin: 0;
+    color: #718096;
+    font-size: 14px;
+}
 
 .panel {
     background: white;
     border-radius: 12px;
     padding: 24px;
     margin-bottom: 24px;
-    box-shadow: 0 4px 16px rgba(25,55,80,.06);
+    box-shadow: 0 4px 16px rgba(25, 55, 80, .06);
 }
 
-.panel h2 { margin: 0 0 22px; font-size: 19px; color: #173b57; }
+.panel h2 {
+    margin: 0 0 22px;
+    font-size: 19px;
+    color: #173b57;
+}
 
 .form-grid {
     display: grid;
@@ -231,9 +351,22 @@ body {
     gap: 17px;
 }
 
-.field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.field.full { grid-column: 1 / -1; }
-.field label { font-size: 13px; font-weight: 600; color: #46576a; }
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+}
+
+.field.full {
+    grid-column: 1 / -1;
+}
+
+.field label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #46576a;
+}
 
 .field input,
 .field select,
@@ -248,16 +381,23 @@ body {
     background: white;
 }
 
-.field textarea { min-height: 80px; resize: vertical; }
+.field textarea {
+    min-height: 80px;
+    resize: vertical;
+}
 
-.actions, .table-actions, .search-form {
+.actions,
+.table-actions,
+.search-form {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
 }
 
-.actions { margin-top: 20px; }
+.actions {
+    margin-top: 20px;
+}
 
 .btn {
     display: inline-block;
@@ -270,14 +410,41 @@ body {
     cursor: pointer;
 }
 
-.btn-primary { background: #1877b9; color: white; }
-.btn-secondary { background: #e9eef4; color: #334155; }
-.btn-edit { background: #e0f2fe; color: #075985; }
-.btn-delete { background: #fee4e2; color: #b42318; }
+.btn-primary {
+    background: #1877b9;
+    color: white;
+}
 
-.alert { padding: 13px 16px; border-radius: 8px; margin-bottom: 18px; }
-.alert-success { background: #dcfce7; color: #166534; }
-.alert-error { background: #fee2e2; color: #991b1b; }
+.btn-secondary {
+    background: #e9eef4;
+    color: #334155;
+}
+
+.btn-edit {
+    background: #e0f2fe;
+    color: #075985;
+}
+
+.btn-delete {
+    background: #fee4e2;
+    color: #b42318;
+}
+
+.alert {
+    padding: 13px 16px;
+    border-radius: 8px;
+    margin-bottom: 18px;
+}
+
+.alert-success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.alert-error {
+    background: #fee2e2;
+    color: #991b1b;
+}
 
 .table-toolbar {
     display: flex;
@@ -288,12 +455,32 @@ body {
     margin-bottom: 18px;
 }
 
-.search-form input { min-width: 240px; }
-.table-wrapper { overflow-x: auto; }
+.search-form input {
+    min-width: 240px;
+}
 
-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
-th, td { padding: 13px 12px; text-align: left; border-bottom: 1px solid #edf0f4; font-size: 13px; }
-th { background: #f7f9fc; color: #526579; }
+.table-wrapper {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    white-space: nowrap;
+}
+
+th,
+td {
+    padding: 13px 12px;
+    text-align: left;
+    border-bottom: 1px solid #edf0f4;
+    font-size: 13px;
+}
+
+th {
+    background: #f7f9fc;
+    color: #526579;
+}
 
 .status {
     display: inline-block;
@@ -303,24 +490,75 @@ th { background: #f7f9fc; color: #526579; }
     font-weight: 700;
 }
 
-.status-menunggu { background: #fef3c7; color: #92400e; }
-.status-diperiksa { background: #dbeafe; color: #1d4ed8; }
-.status-selesai { background: #dcfce7; color: #166534; }
-.status-batal { background: #fee2e2; color: #991b1b; }
-.empty { padding: 28px; text-align: center; color: #718096; }
-
-@media(max-width: 900px) {
-    .sidebar { flex-basis: 210px; width: 210px; }
-    .main-content { padding: 18px; }
-    .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.status-menunggu {
+    background: #fef3c7;
+    color: #92400e;
 }
 
-@media(max-width: 600px) {
-    .main-container { display: block; }
-    .sidebar { width: 100%; min-height: auto; }
-    .form-grid { grid-template-columns: 1fr; }
-    .field.full { grid-column: auto; }
-    .search-form, .search-form input { width: 100%; min-width: 0; }
+.status-dipanggil {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+.status-diperiksa {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.status-selesai {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.status-batal {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.empty {
+    padding: 28px;
+    text-align: center;
+    color: #718096;
+}
+
+@media (max-width: 900px) {
+    .sidebar {
+        flex-basis: 210px;
+        width: 210px;
+    }
+
+    .main-content {
+        padding: 18px;
+    }
+
+    .form-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .main-container {
+        display: block;
+    }
+
+    .sidebar {
+        width: 100%;
+        min-height: auto;
+    }
+
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .field.full {
+        grid-column: auto;
+    }
+
+    .search-form,
+    .search-form input {
+        width: 100%;
+        min-width: 0;
+    }
 }
 </style>
 </head>
@@ -334,6 +572,7 @@ th { background: #f7f9fc; color: #526579; }
     <aside class="sidebar">
         <h2>SimKlinik</h2>
         <p>Sistem Informasi Klinik</p>
+
         <ul>
             <li><a href="dashboard.php">📊 Dashboard</a></li>
             <li><a href="manajemen_user.php">👤 Manajemen User</a></li>
@@ -351,46 +590,62 @@ th { background: #f7f9fc; color: #526579; }
 <?php endif; ?>
 
 <main class="main-content">
+
     <div class="page-heading">
         <h1>Pendaftaran / Kunjungan</h1>
         <p>Kelola pendaftaran pasien dan jadwal kunjungan klinik.</p>
     </div>
 
     <?php if ($success): ?>
-        <div class="alert alert-success"><?= e($success) ?></div>
+        <div class="alert alert-success">
+            <?= e($success) ?>
+        </div>
     <?php endif; ?>
 
     <?php if ($error): ?>
-        <div class="alert alert-error"><?= e($error) ?></div>
+        <div class="alert alert-error">
+            <?= e($error) ?>
+        </div>
     <?php endif; ?>
 
     <section class="panel">
-        <h2><?= $editData ? 'Edit Kunjungan' : 'Pendaftaran Kunjungan' ?></h2>
+        <h2>
+            <?= $editData ? 'Edit Kunjungan' : 'Pendaftaran Kunjungan' ?>
+        </h2>
 
         <form method="POST" action="kunjungan.php">
             <input type="hidden" name="action" value="save">
-            <input type="hidden" name="id" value="<?= e($editData['id'] ?? '') ?>">
+            <input type="hidden" name="id"
+                   value="<?= e($editData['id'] ?? '') ?>">
 
             <div class="form-grid">
+
                 <div class="field">
                     <label for="pasien_id">Pasien *</label>
+
                     <select id="pasien_id" name="pasien_id" required>
                         <option value="">-- Pilih Pasien --</option>
+
                         <?php foreach ($pasienList as $p): ?>
-                            <option value="<?= (int)$p['id'] ?>"
+                            <option
+                                value="<?= (int)$p['id'] ?>"
                                 <?= (int)($editData['pasien_id'] ?? 0) === (int)$p['id'] ? 'selected' : '' ?>>
-                                <?= e($p['no_rm']) ?> - <?= e($p['nama_pasien']) ?>
+                                <?= e($p['no_rm']) ?> -
+                                <?= e($p['nama_pasien']) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
 
                 <div class="field">
-                    <label for="dokter_id">Dokter *</label>
-                    <select id="dokter_id" name="dokter_id" required>
+                    <label for="dokter_id">Dokter</label>
+
+                    <select id="dokter_id" name="dokter_id">
                         <option value="">-- Pilih Dokter --</option>
+
                         <?php foreach ($dokterList as $d): ?>
-                            <option value="<?= (int)$d['id'] ?>"
+                            <option
+                                value="<?= (int)$d['id'] ?>"
                                 <?= (int)($editData['dokter_id'] ?? 0) === (int)$d['id'] ? 'selected' : '' ?>>
                                 <?= e($d['nama_dokter']) ?>
                             </option>
@@ -399,11 +654,14 @@ th { background: #f7f9fc; color: #526579; }
                 </div>
 
                 <div class="field">
-                    <label for="poli_id">Poli *</label>
-                    <select id="poli_id" name="poli_id" required>
+                    <label for="poli_id">Poli</label>
+
+                    <select id="poli_id" name="poli_id">
                         <option value="">-- Pilih Poli --</option>
+
                         <?php foreach ($poliList as $poli): ?>
-                            <option value="<?= (int)$poli['id'] ?>"
+                            <option
+                                value="<?= (int)$poli['id'] ?>"
                                 <?= (int)($editData['poli_id'] ?? 0) === (int)$poli['id'] ? 'selected' : '' ?>>
                                 <?= e($poli['nama_poli']) ?>
                             </option>
@@ -413,34 +671,82 @@ th { background: #f7f9fc; color: #526579; }
 
                 <div class="field">
                     <label for="tanggal_kunjungan">Tanggal Kunjungan *</label>
-                    <input type="date" id="tanggal_kunjungan"
-                           name="tanggal_kunjungan" required
-                           value="<?= e($editData['tanggal_kunjungan'] ?? date('Y-m-d')) ?>">
+
+                    <input
+                        type="date"
+                        id="tanggal_kunjungan"
+                        name="tanggal_kunjungan"
+                        required
+                        value="<?= e($editData['tanggal_kunjungan'] ?? date('Y-m-d')) ?>"
+                    >
                 </div>
 
                 <div class="field">
-                    <label for="jenis_kunjungan">Jenis Kunjungan</label>
-                    <select id="jenis_kunjungan" name="jenis_kunjungan">
-                        <?php
-                        $jenisSaatIni = $editData['jenis_kunjungan'] ?? 'Umum';
-                        foreach (['Umum', 'Kontrol', 'Darurat'] as $jenis):
-                        ?>
-                            <option value="<?= e($jenis) ?>"
-                                <?= $jenisSaatIni === $jenis ? 'selected' : '' ?>>
-                                <?= e($jenis) ?>
-                            </option>
-                        <?php endforeach; ?>
+                    <label for="jenis_kunjungan">Jenis Kunjungan *</label>
+
+                    <?php $jenisSaatIni = $editData['jenis_kunjungan'] ?? 'lama'; ?>
+
+                    <select id="jenis_kunjungan" name="jenis_kunjungan" required>
+                        <option value="baru"
+                            <?= $jenisSaatIni === 'baru' ? 'selected' : '' ?>>
+                            Baru
+                        </option>
+
+                        <option value="lama"
+                            <?= $jenisSaatIni === 'lama' ? 'selected' : '' ?>>
+                            Lama
+                        </option>
                     </select>
                 </div>
 
                 <div class="field">
+                    <label for="cara_bayar">Cara Pembayaran *</label>
+
+                    <?php $caraBayarSaatIni = $editData['cara_bayar'] ?? 'umum'; ?>
+
+                    <select id="cara_bayar" name="cara_bayar" required>
+                        <option value="umum"
+                            <?= $caraBayarSaatIni === 'umum' ? 'selected' : '' ?>>
+                            Umum
+                        </option>
+
+                        <option value="bpjs"
+                            <?= $caraBayarSaatIni === 'bpjs' ? 'selected' : '' ?>>
+                            BPJS
+                        </option>
+
+                        <option value="asuransi"
+                            <?= $caraBayarSaatIni === 'asuransi' ? 'selected' : '' ?>>
+                            Asuransi
+                        </option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label for="no_bpjs">Nomor BPJS (jika ada)</label>
+
+                    <input
+                        type="text"
+                        id="no_bpjs"
+                        name="no_bpjs"
+                        value="<?= e($editData['no_bpjs'] ?? '') ?>"
+                    >
+                </div>
+
+                <div class="field">
                     <label for="status">Status</label>
+
+                    <?php $statusSaatIni = $editData['status'] ?? 'menunggu'; ?>
+
                     <select id="status" name="status">
                         <?php
-                        $statusSaatIni = $editData['status'] ?? 'menunggu';
-                        foreach (['menunggu', 'diperiksa', 'selesai', 'batal'] as $st):
+                        foreach (
+                            ['menunggu', 'dipanggil', 'diperiksa', 'selesai', 'batal']
+                            as $st
+                        ):
                         ?>
-                            <option value="<?= e($st) ?>"
+                            <option
+                                value="<?= e($st) ?>"
                                 <?= $statusSaatIni === $st ? 'selected' : '' ?>>
                                 <?= e(ucfirst($st)) ?>
                             </option>
@@ -450,18 +756,28 @@ th { background: #f7f9fc; color: #526579; }
 
                 <div class="field full">
                     <label for="keluhan">Keluhan Pasien</label>
-                    <textarea id="keluhan" name="keluhan"><?= e($editData['keluhan'] ?? '') ?></textarea>
+
+                    <textarea
+                        id="keluhan"
+                        name="keluhan"
+                    ><?= e($editData['keluhan_awal'] ?? '') ?></textarea>
                 </div>
+
             </div>
 
             <div class="actions">
                 <button type="submit" class="btn btn-primary">
                     <?= $editData ? 'Simpan Perubahan' : 'Daftarkan Kunjungan' ?>
                 </button>
+
                 <?php if ($editData): ?>
-                    <a href="kunjungan.php" class="btn btn-secondary">Batal</a>
+                    <a href="kunjungan.php" class="btn btn-secondary">
+                        Batal
+                    </a>
                 <?php else: ?>
-                    <button type="reset" class="btn btn-secondary">Reset</button>
+                    <button type="reset" class="btn btn-secondary">
+                        Reset
+                    </button>
                 <?php endif; ?>
             </div>
         </form>
@@ -471,15 +787,27 @@ th { background: #f7f9fc; color: #526579; }
         <h2>Daftar Kunjungan</h2>
 
         <div class="table-toolbar">
-            <span>Total data: <strong><?= count($kunjunganList) ?></strong> kunjungan</span>
+            <span>
+                Total data:
+                <strong><?= count($kunjunganList) ?></strong> kunjungan
+            </span>
 
             <form method="GET" action="kunjungan.php" class="search-form">
-                <input type="text" name="search"
-                       placeholder="Cari pasien, dokter, atau poli..."
-                       value="<?= e($search) ?>">
-                <button class="btn btn-primary" type="submit">Cari</button>
+                <input
+                    type="text"
+                    name="search"
+                    placeholder="Cari pasien, dokter, poli, atau nomor kunjungan..."
+                    value="<?= e($search) ?>"
+                >
+
+                <button class="btn btn-primary" type="submit">
+                    Cari
+                </button>
+
                 <?php if ($search !== ''): ?>
-                    <a href="kunjungan.php" class="btn btn-secondary">Reset</a>
+                    <a href="kunjungan.php" class="btn btn-secondary">
+                        Reset
+                    </a>
                 <?php endif; ?>
             </form>
         </div>
@@ -489,53 +817,88 @@ th { background: #f7f9fc; color: #526579; }
                 <thead>
                     <tr>
                         <th>No.</th>
+                        <th>No. Kunjungan</th>
                         <th>Tanggal</th>
                         <th>No. RM</th>
                         <th>Nama Pasien</th>
                         <th>Dokter</th>
                         <th>Poli</th>
                         <th>Jenis</th>
+                        <th>Cara Bayar</th>
                         <th>Status</th>
                         <th>Aksi</th>
                     </tr>
                 </thead>
+
                 <tbody>
                 <?php if ($kunjunganList): ?>
                     <?php foreach ($kunjunganList as $i => $k): ?>
                         <tr>
                             <td><?= $i + 1 ?></td>
+                            <td><?= e($k['no_kunjungan']) ?></td>
                             <td><?= e($k['tanggal_kunjungan']) ?></td>
                             <td><?= e($k['no_rm'] ?? '-') ?></td>
                             <td><?= e($k['nama_pasien'] ?? '-') ?></td>
                             <td><?= e($k['nama_dokter'] ?? '-') ?></td>
                             <td><?= e($k['nama_poli'] ?? '-') ?></td>
-                            <td><?= e($k['jenis_kunjungan'] ?? '-') ?></td>
+                            <td><?= e(ucfirst($k['jenis_kunjungan'] ?? '-')) ?></td>
+                            <td><?= e(strtoupper($k['cara_bayar'] ?? '-')) ?></td>
+
                             <td>
-                                <span class="status status-<?= e($k['status']) ?>">
-                                    <?= e(ucfirst($k['status'])) ?>
+                                <span class="status status-<?= e($k['status'] ?? 'menunggu') ?>">
+                                    <?= e(ucfirst($k['status'] ?? 'menunggu')) ?>
                                 </span>
                             </td>
+
                             <td>
                                 <div class="table-actions">
-                                    <a href="kunjungan.php?edit=<?= (int)$k['id'] ?>"
-                                       class="btn btn-edit">Edit</a>
-                                    <form method="POST" action="kunjungan.php"
-                                          onsubmit="return confirm('Yakin ingin menghapus kunjungan ini?')">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="id" value="<?= (int)$k['id'] ?>">
-                                        <button type="submit" class="btn btn-delete">Hapus</button>
+                                    <a
+                                        href="kunjungan.php?edit=<?= (int)$k['id'] ?>"
+                                        class="btn btn-edit"
+                                    >
+                                        Edit
+                                    </a>
+
+                                    <form
+                                        method="POST"
+                                        action="kunjungan.php"
+                                        onsubmit="return confirm('Yakin ingin menghapus kunjungan ini?')"
+                                    >
+                                        <input
+                                            type="hidden"
+                                            name="action"
+                                            value="delete"
+                                        >
+
+                                        <input
+                                            type="hidden"
+                                            name="id"
+                                            value="<?= (int)$k['id'] ?>"
+                                        >
+
+                                        <button
+                                            type="submit"
+                                            class="btn btn-delete"
+                                        >
+                                            Hapus
+                                        </button>
                                     </form>
                                 </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <tr><td colspan="9" class="empty">Belum ada data kunjungan.</td></tr>
+                    <tr>
+                        <td colspan="11" class="empty">
+                            Belum ada data kunjungan.
+                        </td>
+                    </tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
     </section>
+
 </main>
 </div>
 </body>

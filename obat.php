@@ -7,6 +7,17 @@ $db = (new Database())->getConnection();
 $message = '';
 $message_type = '';
 
+/* Notifikasi */
+if (isset($_GET['msg'])) {
+    if ($_GET['msg'] === 'hapus') {
+        $message = 'Data obat berhasil dihapus.';
+        $message_type = 'success';
+    } elseif ($_GET['msg'] === 'simpan') {
+        $message = 'Data obat berhasil disimpan.';
+        $message_type = 'success';
+    }
+}
+
 /* Hapus obat */
 if (isset($_GET['hapus'])) {
     $id = (int) $_GET['hapus'];
@@ -23,79 +34,148 @@ if (isset($_GET['hapus'])) {
     }
 }
 
-/* Notifikasi */
-if (isset($_GET['msg']) && $_GET['msg'] === 'hapus') {
-    $message = 'Data obat berhasil dihapus.';
-    $message_type = 'success';
-}
-
-/* Simpan obat */
+/* Simpan dan edit obat */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $id = (int) ($_POST['id'] ?? 0);
     $kode_obat = trim($_POST['kode_obat'] ?? '');
     $nama_obat = trim($_POST['nama_obat'] ?? '');
-    $kategori_id = (int) ($_POST['kategori_id'] ?? 0);
-    $satuan_id = (int) ($_POST['satuan_id'] ?? 0);
-    $harga_beli = (float) ($_POST['harga_beli'] ?? 0);
-    $harga_jual = (float) ($_POST['harga_jual'] ?? 0);
-    $stok = (int) ($_POST['stok'] ?? 0);
-    $stok_minimum = (int) ($_POST['stok_minimum'] ?? 0);
-    $tanggal_kadaluarsa = $_POST['tanggal_kadaluarsa'] ?: null;
-    $keterangan = trim($_POST['keterangan'] ?? '');
+
+    $kategori_id = ($_POST['kategori_id'] ?? '') !== ''
+        ? (int) $_POST['kategori_id'] : null;
+
+    $satuan_id = ($_POST['satuan_id'] ?? '') !== ''
+        ? (int) $_POST['satuan_id'] : null;
+
+    $jenis_obat = $_POST['jenis_obat'] ?? 'bebas';
+    $bentuk_obat = trim($_POST['bentuk_obat'] ?? '');
+    $harga_beli = max(0, (float) ($_POST['harga_beli'] ?? 0));
+    $harga_jual = max(0, (float) ($_POST['harga_jual'] ?? 0));
+    $stok = max(0, (int) ($_POST['stok'] ?? 0));
+    $stok_minimum = max(0, (int) ($_POST['stok_minimum'] ?? 0));
+
+    $tanggal_expired = trim($_POST['tanggal_expired'] ?? '');
+    $tanggal_expired = $tanggal_expired !== '' ? $tanggal_expired : null;
+
+    $nomor_batch = trim($_POST['nomor_batch'] ?? '');
+    $deskripsi = trim($_POST['deskripsi'] ?? '');
+    $status = $_POST['status'] ?? 'aktif';
+
+    $jenis_valid = [
+        'bebas',
+        'bebas_terbatas',
+        'keras',
+        'herbal'
+    ];
+
+    $status_valid = ['aktif', 'nonaktif'];
 
     if ($kode_obat === '' || $nama_obat === '') {
         $message = 'Kode dan nama obat wajib diisi.';
+        $message_type = 'error';
+    } elseif (strlen($kode_obat) > 30) {
+        $message = 'Kode obat maksimal 30 karakter.';
+        $message_type = 'error';
+    } elseif (!in_array($jenis_obat, $jenis_valid, true)) {
+        $message = 'Jenis obat tidak valid.';
+        $message_type = 'error';
+    } elseif (!in_array($status, $status_valid, true)) {
+        $message = 'Status obat tidak valid.';
         $message_type = 'error';
     } else {
         try {
             if ($id > 0) {
                 $sql = "UPDATE obat SET
-                        kode_obat = ?, nama_obat = ?, kategori_id = ?,
-                        satuan_id = ?, harga_beli = ?, harga_jual = ?,
-                        stok = ?, stok_minimum = ?, tanggal_kadaluarsa = ?,
-                        keterangan = ?
-                        WHERE id = ?";
+                    kode_obat = ?,
+                    nama_obat = ?,
+                    kategori_id = ?,
+                    satuan_id = ?,
+                    jenis_obat = ?,
+                    bentuk_obat = ?,
+                    harga_beli = ?,
+                    harga_jual = ?,
+                    stok = ?,
+                    stok_minimum = ?,
+                    tanggal_expired = ?,
+                    nomor_batch = ?,
+                    deskripsi = ?,
+                    status = ?
+                    WHERE id = ?";
+
                 $stmt = $db->prepare($sql);
                 $stmt->execute([
-                    $kode_obat, $nama_obat,
-                    $kategori_id ?: null, $satuan_id ?: null,
-                    $harga_beli, $harga_jual, $stok, $stok_minimum,
-                    $tanggal_kadaluarsa, $keterangan ?: null, $id
+                    $kode_obat,
+                    $nama_obat,
+                    $kategori_id,
+                    $satuan_id,
+                    $jenis_obat,
+                    $bentuk_obat !== '' ? $bentuk_obat : null,
+                    $harga_beli,
+                    $harga_jual,
+                    $stok,
+                    $stok_minimum,
+                    $tanggal_expired,
+                    $nomor_batch !== '' ? $nomor_batch : null,
+                    $deskripsi !== '' ? $deskripsi : null,
+                    $status,
+                    $id
                 ]);
-
-                $message = 'Data obat berhasil diperbarui.';
             } else {
-                $sql = "INSERT INTO obat
-                        (kode_obat, nama_obat, kategori_id, satuan_id,
-                         harga_beli, harga_jual, stok, stok_minimum,
-                         tanggal_kadaluarsa, keterangan)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                $sql = "INSERT INTO obat (
+                    kode_obat,
+                    nama_obat,
+                    kategori_id,
+                    satuan_id,
+                    jenis_obat,
+                    bentuk_obat,
+                    harga_beli,
+                    harga_jual,
+                    stok,
+                    stok_minimum,
+                    tanggal_expired,
+                    nomor_batch,
+                    deskripsi,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
                 $stmt = $db->prepare($sql);
                 $stmt->execute([
-                    $kode_obat, $nama_obat,
-                    $kategori_id ?: null, $satuan_id ?: null,
-                    $harga_beli, $harga_jual, $stok, $stok_minimum,
-                    $tanggal_kadaluarsa, $keterangan ?: null
+                    $kode_obat,
+                    $nama_obat,
+                    $kategori_id,
+                    $satuan_id,
+                    $jenis_obat,
+                    $bentuk_obat !== '' ? $bentuk_obat : null,
+                    $harga_beli,
+                    $harga_jual,
+                    $stok,
+                    $stok_minimum,
+                    $tanggal_expired,
+                    $nomor_batch !== '' ? $nomor_batch : null,
+                    $deskripsi !== '' ? $deskripsi : null,
+                    $status
                 ]);
-
-                $message = 'Data obat berhasil ditambahkan.';
             }
 
-            $message_type = 'success';
+            header('Location: obat.php?msg=simpan');
+            exit;
         } catch (PDOException $e) {
-            $message = 'Gagal menyimpan data. Periksa kode obat dan struktur tabel.';
+            $message = 'Gagal menyimpan data. Pastikan kode obat tidak duplikat dan data kategori atau satuan valid.';
             $message_type = 'error';
         }
     }
 }
 
-/* Data untuk dropdown */
+/* Data kategori dan satuan */
 $kategori = $db->query(
-    "SELECT id, nama_kategori FROM kategori_obat ORDER BY nama_kategori"
+    "SELECT id, nama_kategori
+     FROM kategori_obat
+     ORDER BY nama_kategori"
 )->fetchAll(PDO::FETCH_ASSOC);
 
 $satuan = $db->query(
-    "SELECT id, nama_satuan FROM satuan_obat ORDER BY nama_satuan"
+    "SELECT id, nama_satuan
+     FROM satuan_obat
+     ORDER BY nama_satuan"
 )->fetchAll(PDO::FETCH_ASSOC);
 
 /* Data edit */
@@ -105,16 +185,28 @@ if (isset($_GET['edit'])) {
     $stmt = $db->prepare("SELECT * FROM obat WHERE id = ?");
     $stmt->execute([(int) $_GET['edit']]);
     $edit = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$edit) {
+        $message = 'Data obat tidak ditemukan.';
+        $message_type = 'error';
+    }
 }
 
 /* Daftar obat */
-$sql = "SELECT o.*, k.nama_kategori, s.nama_satuan
+$sql = "SELECT
+            o.*,
+            k.nama_kategori,
+            s.nama_satuan
         FROM obat o
         LEFT JOIN kategori_obat k ON o.kategori_id = k.id
         LEFT JOIN satuan_obat s ON o.satuan_id = s.id
         ORDER BY o.id DESC";
 
 $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+function e($value) {
+    return htmlspecialchars((string) ($value ?? ''), ENT_QUOTES, 'UTF-8');
+}
 ?>
 
 <!DOCTYPE html>
@@ -254,6 +346,16 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
             color: #991b1b;
         }
 
+        .obat-page .status-aktif {
+            color: #166534;
+            font-weight: 600;
+        }
+
+        .obat-page .status-nonaktif {
+            color: #991b1b;
+            font-weight: 600;
+        }
+
         @media (max-width: 768px) {
             .obat-page .form-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -263,6 +365,10 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
         @media (max-width: 480px) {
             .obat-page .form-grid {
                 grid-template-columns: 1fr;
+            }
+
+            .obat-page .full-width {
+                grid-column: auto;
             }
         }
     </style>
@@ -284,7 +390,7 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
         <?php if ($message): ?>
             <div class="alert <?= $message_type === 'success' ? 'success' : 'error' ?>">
-                <?= htmlspecialchars($message) ?>
+                <?= e($message) ?>
             </div>
         <?php endif; ?>
 
@@ -298,14 +404,14 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
                 <div class="form-grid">
                     <div class="form-group">
                         <label>Kode Obat *</label>
-                        <input type="text" name="kode_obat" required
-                               value="<?= htmlspecialchars($edit['kode_obat'] ?? '') ?>">
+                        <input type="text" name="kode_obat" maxlength="30" required
+                               value="<?= e($edit['kode_obat'] ?? '') ?>">
                     </div>
 
                     <div class="form-group">
                         <label>Nama Obat *</label>
-                        <input type="text" name="nama_obat" required
-                               value="<?= htmlspecialchars($edit['nama_obat'] ?? '') ?>">
+                        <input type="text" name="nama_obat" maxlength="200" required
+                               value="<?= e($edit['nama_obat'] ?? '') ?>">
                     </div>
 
                     <div class="form-group">
@@ -315,7 +421,7 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
                             <?php foreach ($kategori as $k): ?>
                                 <option value="<?= (int) $k['id'] ?>"
                                     <?= (string) ($edit['kategori_id'] ?? '') === (string) $k['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($k['nama_kategori']) ?>
+                                    <?= e($k['nama_kategori']) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -328,45 +434,93 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
                             <?php foreach ($satuan as $s): ?>
                                 <option value="<?= (int) $s['id'] ?>"
                                     <?= (string) ($edit['satuan_id'] ?? '') === (string) $s['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($s['nama_satuan']) ?>
+                                    <?= e($s['nama_satuan']) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
 
                     <div class="form-group">
+                        <label>Jenis Obat</label>
+                        <select name="jenis_obat">
+                            <?php
+                            $jenis_options = [
+                                'bebas' => 'Bebas',
+                                'bebas_terbatas' => 'Bebas Terbatas',
+                                'keras' => 'Keras',
+                                'herbal' => 'Herbal'
+                            ];
+                            $jenis_terpilih = $edit['jenis_obat'] ?? 'bebas';
+                            foreach ($jenis_options as $value => $label):
+                            ?>
+                                <option value="<?= e($value) ?>"
+                                    <?= $jenis_terpilih === $value ? 'selected' : '' ?>>
+                                    <?= e($label) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Bentuk Obat</label>
+                        <input type="text" name="bentuk_obat" maxlength="50"
+                               placeholder="Contoh: Tablet, sirup"
+                               value="<?= e($edit['bentuk_obat'] ?? '') ?>">
+                    </div>
+
+                    <div class="form-group">
                         <label>Harga Beli</label>
                         <input type="number" name="harga_beli" min="0" step="0.01"
-                               value="<?= htmlspecialchars((string) ($edit['harga_beli'] ?? '0')) ?>">
+                               value="<?= e($edit['harga_beli'] ?? '0') ?>">
                     </div>
 
                     <div class="form-group">
                         <label>Harga Jual</label>
                         <input type="number" name="harga_jual" min="0" step="0.01"
-                               value="<?= htmlspecialchars((string) ($edit['harga_jual'] ?? '0')) ?>">
+                               value="<?= e($edit['harga_jual'] ?? '0') ?>">
                     </div>
 
                     <div class="form-group">
                         <label>Stok</label>
                         <input type="number" name="stok" min="0"
-                               value="<?= htmlspecialchars((string) ($edit['stok'] ?? '0')) ?>">
+                               value="<?= e($edit['stok'] ?? '0') ?>">
                     </div>
 
                     <div class="form-group">
                         <label>Stok Minimum</label>
                         <input type="number" name="stok_minimum" min="0"
-                               value="<?= htmlspecialchars((string) ($edit['stok_minimum'] ?? '0')) ?>">
+                               value="<?= e($edit['stok_minimum'] ?? '0') ?>">
                     </div>
 
                     <div class="form-group">
                         <label>Tanggal Kedaluwarsa</label>
-                        <input type="date" name="tanggal_kadaluarsa"
-                               value="<?= htmlspecialchars($edit['tanggal_kadaluarsa'] ?? '') ?>">
+                        <input type="date" name="tanggal_expired"
+                               value="<?= e($edit['tanggal_expired'] ?? '') ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Nomor Batch</label>
+                        <input type="text" name="nomor_batch" maxlength="100"
+                               value="<?= e($edit['nomor_batch'] ?? '') ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select name="status">
+                            <option value="aktif"
+                                <?= ($edit['status'] ?? 'aktif') === 'aktif' ? 'selected' : '' ?>>
+                                Aktif
+                            </option>
+                            <option value="nonaktif"
+                                <?= ($edit['status'] ?? '') === 'nonaktif' ? 'selected' : '' ?>>
+                                Nonaktif
+                            </option>
+                        </select>
                     </div>
 
                     <div class="form-group full-width">
-                        <label>Keterangan</label>
-                        <textarea name="keterangan"><?= htmlspecialchars($edit['keterangan'] ?? '') ?></textarea>
+                        <label>Deskripsi</label>
+                        <textarea name="deskripsi"><?= e($edit['deskripsi'] ?? '') ?></textarea>
                     </div>
                 </div>
 
@@ -392,6 +546,8 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
                             <th>No.</th>
                             <th>Kode</th>
                             <th>Nama Obat</th>
+                            <th>Jenis</th>
+                            <th>Bentuk</th>
                             <th>Kategori</th>
                             <th>Satuan</th>
                             <th>Harga Beli</th>
@@ -399,27 +555,35 @@ $obat = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
                             <th>Stok</th>
                             <th>Stok Minimum</th>
                             <th>Kedaluwarsa</th>
+                            <th>Nomor Batch</th>
+                            <th>Status</th>
                             <th>Aksi</th>
                         </tr>
                     </thead>
                     <tbody>
                     <?php if (!$obat): ?>
                         <tr>
-                            <td colspan="11">Belum ada data obat.</td>
+                            <td colspan="15">Belum ada data obat.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($obat as $i => $o): ?>
                             <tr>
                                 <td><?= $i + 1 ?></td>
-                                <td><?= htmlspecialchars($o['kode_obat'] ?? '') ?></td>
-                                <td><?= htmlspecialchars($o['nama_obat'] ?? '') ?></td>
-                                <td><?= htmlspecialchars($o['nama_kategori'] ?? '-') ?></td>
-                                <td><?= htmlspecialchars($o['nama_satuan'] ?? '-') ?></td>
+                                <td><?= e($o['kode_obat']) ?></td>
+                                <td><?= e($o['nama_obat']) ?></td>
+                                <td><?= e(ucwords(str_replace('_', ' ', $o['jenis_obat'] ?? 'bebas'))) ?></td>
+                                <td><?= e($o['bentuk_obat'] ?? '-') ?: '-' ?></td>
+                                <td><?= e($o['nama_kategori'] ?? '-') ?: '-' ?></td>
+                                <td><?= e($o['nama_satuan'] ?? '-') ?: '-' ?></td>
                                 <td>Rp <?= number_format((float) ($o['harga_beli'] ?? 0), 0, ',', '.') ?></td>
                                 <td>Rp <?= number_format((float) ($o['harga_jual'] ?? 0), 0, ',', '.') ?></td>
                                 <td><?= (int) ($o['stok'] ?? 0) ?></td>
                                 <td><?= (int) ($o['stok_minimum'] ?? 0) ?></td>
-                                <td><?= htmlspecialchars($o['tanggal_kadaluarsa'] ?? '-') ?></td>
+                                <td><?= e($o['tanggal_expired'] ?? '-') ?: '-' ?></td>
+                                <td><?= e($o['nomor_batch'] ?? '-') ?: '-' ?></td>
+                                <td class="status-<?= e($o['status'] ?? 'aktif') ?>">
+                                    <?= e(ucfirst($o['status'] ?? 'aktif')) ?>
+                                </td>
                                 <td>
                                     <a class="btn btn-edit"
                                        href="obat.php?edit=<?= (int) $o['id'] ?>">Edit</a>

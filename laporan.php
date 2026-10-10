@@ -1,5 +1,6 @@
 <?php
 require_once 'config/config.php';
+
 requireLogin();
 
 $db = (new Database())->getConnection();
@@ -25,65 +26,78 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tanggal_akhir)) {
 $laporan = [];
 $total_data = 0;
 $total_pendapatan = 0;
+$error = '';
 
-if ($tanggal_awal <= $tanggal_akhir) {
-    if ($jenis_laporan === 'kunjungan') {
-        $sql = "
-            SELECT
-                k.id,
-                k.tanggal_kunjungan,
-                p.no_rm,
-                p.nama_pasien,
-                d.nama_dokter,
-                po.nama_poli,
-                k.status
-            FROM kunjungan k
-            LEFT JOIN pasien p ON p.id = k.pasien_id
-            LEFT JOIN dokter d ON d.id = k.dokter_id
-            LEFT JOIN poli po ON po.id = k.poli_id
-            WHERE k.tanggal_kunjungan >= ?
-              AND k.tanggal_kunjungan < DATE_ADD(?, INTERVAL 1 DAY)
-            ORDER BY k.tanggal_kunjungan DESC
-        ";
+try {
+    if ($tanggal_awal <= $tanggal_akhir) {
 
-        $stmt = $db->prepare($sql);
-        $stmt->execute([$tanggal_awal, $tanggal_akhir]);
-        $laporan = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $total_data = count($laporan);
-    } else {
-        $sql = "
-            SELECT
-                b.id,
-                b.tanggal_pembayaran,
-                p.no_rm,
-                p.nama_pasien,
-                b.metode_pembayaran,
-                b.total_tagihan,
-                b.jumlah_bayar,
-                b.status
-            FROM pembayaran b
-            LEFT JOIN kunjungan k ON k.id = b.kunjungan_id
-            LEFT JOIN pasien p ON p.id = k.pasien_id
-            WHERE b.tanggal_pembayaran >= ?
-              AND b.tanggal_pembayaran < DATE_ADD(?, INTERVAL 1 DAY)
-            ORDER BY b.tanggal_pembayaran DESC
-        ";
+        if ($jenis_laporan === 'kunjungan') {
+            $sql = "
+                SELECT
+                    k.id,
+                    k.tanggal_kunjungan,
+                    p.no_rm,
+                    p.nama_pasien,
+                    d.nama_dokter,
+                    po.nama_poli,
+                    k.status
+                FROM kunjungan k
+                LEFT JOIN pasien p ON p.id = k.pasien_id
+                LEFT JOIN dokter d ON d.id = k.dokter_id
+                LEFT JOIN poli po ON po.id = k.poli_id
+                WHERE k.tanggal_kunjungan >= ?
+                  AND k.tanggal_kunjungan < DATE_ADD(?, INTERVAL 1 DAY)
+                ORDER BY k.tanggal_kunjungan DESC
+            ";
 
-        $stmt = $db->prepare($sql);
-        $stmt->execute([$tanggal_awal, $tanggal_akhir]);
-        $laporan = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$tanggal_awal, $tanggal_akhir]);
+            $laporan = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $total_data = count($laporan);
+        } else {
+            $sql = "
+                SELECT
+                    b.id,
+                    b.no_pembayaran,
+                    b.tanggal_pembayaran,
+                    p.no_rm,
+                    p.nama_pasien,
+                    b.metode_pembayaran,
+                    b.total_tagihan,
+                    b.total_bayar,
+                    b.status
+                FROM pembayaran b
+                LEFT JOIN pasien p ON p.id = b.pasien_id
+                WHERE b.tanggal_pembayaran >= ?
+                  AND b.tanggal_pembayaran < DATE_ADD(?, INTERVAL 1 DAY)
+                ORDER BY b.tanggal_pembayaran DESC
+            ";
 
-        foreach ($laporan as $item) {
-            if (($item['status'] ?? '') === 'lunas') {
-                $total_pendapatan += (float) ($item['jumlah_bayar'] ?? 0);
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$tanggal_awal, $tanggal_akhir]);
+            $laporan = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($laporan as $item) {
+                if (($item['status'] ?? '') === 'lunas') {
+                    $total_pendapatan += (float) ($item['total_bayar'] ?? 0);
+                }
             }
         }
+
+        $total_data = count($laporan);
+
+    } else {
+        $tanggal_awal = date('Y-m-01');
+        $tanggal_akhir = date('Y-m-d');
     }
-} else {
-    $tanggal_awal = date('Y-m-01');
-    $tanggal_akhir = date('Y-m-d');
+
+} catch (PDOException $e) {
+    $error = 'Data laporan gagal dimuat. Periksa kembali struktur tabel dan nama kolom database.';
+}
+
+function e($value)
+{
+    return htmlspecialchars((string) ($value ?? '-'), ENT_QUOTES, 'UTF-8');
 }
 ?>
 
@@ -98,7 +112,8 @@ if ($tanggal_awal <= $tanggal_akhir) {
     <style>
         .report-page { padding: 20px; }
 
-        .report-page .report-card {
+        .report-page .report-card,
+        .report-page .summary-box {
             background: #fff;
             padding: 18px;
             border-radius: 10px;
@@ -134,14 +149,14 @@ if ($tanggal_awal <= $tanggal_akhir) {
             border: none;
             border-radius: 6px;
             padding: 9px 13px;
-            text-decoration: none;
             cursor: pointer;
             font-size: 13px;
+            text-decoration: none;
         }
 
         .report-page .primary {
             background: #2563eb;
-            color: white;
+            color: #fff;
         }
 
         .report-page .secondary {
@@ -157,10 +172,7 @@ if ($tanggal_awal <= $tanggal_akhir) {
         }
 
         .report-page .summary-box {
-            background: #fff;
-            padding: 16px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px #0000000d;
+            margin-bottom: 0;
         }
 
         .report-page .summary-box p {
@@ -198,6 +210,14 @@ if ($tanggal_awal <= $tanggal_akhir) {
             color: #777;
         }
 
+        .report-page .error {
+            padding: 12px;
+            margin-bottom: 16px;
+            background: #fee2e2;
+            color: #991b1b;
+            border-radius: 8px;
+        }
+
         @media (max-width: 800px) {
             .report-page .filter-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -229,8 +249,8 @@ if ($tanggal_awal <= $tanggal_akhir) {
         }
     </style>
 </head>
-<body>
 
+<body>
 <?php require_once 'sidebar.php'; ?>
 
 <main class="main-content">
@@ -241,6 +261,10 @@ if ($tanggal_awal <= $tanggal_akhir) {
     <div class="content report-page">
         <h2>Laporan Klinik</h2>
         <p>Lihat laporan kunjungan dan pembayaran berdasarkan periode.</p>
+
+        <?php if ($error !== ''): ?>
+            <div class="error"><?= e($error) ?></div>
+        <?php endif; ?>
 
         <section class="report-card filter-card">
             <form method="GET" action="laporan.php">
@@ -262,19 +286,19 @@ if ($tanggal_awal <= $tanggal_akhir) {
                     <div>
                         <label>Tanggal Awal</label>
                         <input type="date" name="tanggal_awal" required
-                               value="<?= htmlspecialchars($tanggal_awal) ?>">
+                            value="<?= e($tanggal_awal) ?>">
                     </div>
 
                     <div>
                         <label>Tanggal Akhir</label>
                         <input type="date" name="tanggal_akhir" required
-                               value="<?= htmlspecialchars($tanggal_akhir) ?>">
+                            value="<?= e($tanggal_akhir) ?>">
                     </div>
 
                     <div class="no-print">
                         <button type="submit" class="btn primary">Tampilkan</button>
                         <button type="button" class="btn secondary"
-                                onclick="window.print()">Cetak</button>
+                            onclick="window.print()">Cetak</button>
                     </div>
                 </div>
             </form>
@@ -282,7 +306,11 @@ if ($tanggal_awal <= $tanggal_akhir) {
 
         <div class="summary-grid">
             <div class="summary-box">
-                <p><?= $jenis_laporan === 'kunjungan' ? 'Total Kunjungan' : 'Total Transaksi' ?></p>
+                <p>
+                    <?= $jenis_laporan === 'kunjungan'
+                        ? 'Total Kunjungan'
+                        : 'Total Transaksi' ?>
+                </p>
                 <h3><?= number_format($total_data, 0, ',', '.') ?></h3>
             </div>
 
@@ -302,10 +330,8 @@ if ($tanggal_awal <= $tanggal_akhir) {
             </h3>
 
             <p>
-                Periode:
-                <?= htmlspecialchars($tanggal_awal) ?>
-                sampai
-                <?= htmlspecialchars($tanggal_akhir) ?>
+                Periode: <?= e($tanggal_awal) ?>
+                sampai <?= e($tanggal_akhir) ?>
             </p>
 
             <div class="table-wrap">
@@ -324,12 +350,13 @@ if ($tanggal_awal <= $tanggal_akhir) {
                     <?php else: ?>
                         <tr>
                             <th>No.</th>
+                            <th>No. Pembayaran</th>
                             <th>Tanggal</th>
                             <th>No. RM</th>
                             <th>Nama Pasien</th>
                             <th>Metode</th>
                             <th>Total Tagihan</th>
-                            <th>Jumlah Dibayar</th>
+                            <th>Total Dibayar</th>
                             <th>Status</th>
                         </tr>
                     <?php endif; ?>
@@ -338,9 +365,11 @@ if ($tanggal_awal <= $tanggal_akhir) {
                     <tbody>
                     <?php if (empty($laporan)): ?>
                         <tr>
-                            <td colspan="<?= $jenis_laporan === 'kunjungan' ? 7 : 8 ?>"
+                            <td colspan="<?= $jenis_laporan === 'kunjungan' ? 7 : 9 ?>"
                                 class="empty">
-                                Tidak ada data pada periode ini.
+                                <?= $error !== ''
+                                    ? 'Laporan belum dapat ditampilkan.'
+                                    : 'Tidak ada data pada periode ini.' ?>
                             </td>
                         </tr>
                     <?php else: ?>
@@ -349,20 +378,21 @@ if ($tanggal_awal <= $tanggal_akhir) {
                                 <td><?= $i + 1 ?></td>
 
                                 <?php if ($jenis_laporan === 'kunjungan'): ?>
-                                    <td><?= htmlspecialchars($row['tanggal_kunjungan'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['no_rm'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['nama_pasien'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['nama_dokter'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['nama_poli'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['status'] ?? '-') ?></td>
+                                    <td><?= e($row['tanggal_kunjungan']) ?></td>
+                                    <td><?= e($row['no_rm']) ?></td>
+                                    <td><?= e($row['nama_pasien']) ?></td>
+                                    <td><?= e($row['nama_dokter']) ?></td>
+                                    <td><?= e($row['nama_poli']) ?></td>
+                                    <td><?= e($row['status']) ?></td>
                                 <?php else: ?>
-                                    <td><?= htmlspecialchars($row['tanggal_pembayaran'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['no_rm'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars($row['nama_pasien'] ?? '-') ?></td>
-                                    <td><?= htmlspecialchars(strtoupper($row['metode_pembayaran'] ?? '-')) ?></td>
-                                    <td>Rp <?= number_format((float) ($row['total_tagihan'] ?? 0), 0, ',', '.') ?></td>
-                                    <td>Rp <?= number_format((float) ($row['jumlah_bayar'] ?? 0), 0, ',', '.') ?></td>
-                                    <td><?= htmlspecialchars(ucwords(str_replace('_', ' ', $row['status'] ?? '-'))) ?></td>
+                                    <td><?= e($row['no_pembayaran']) ?></td>
+                                    <td><?= e($row['tanggal_pembayaran']) ?></td>
+                                    <td><?= e($row['no_rm']) ?></td>
+                                    <td><?= e($row['nama_pasien']) ?></td>
+                                    <td><?= e(strtoupper($row['metode_pembayaran'])) ?></td>
+                                    <td>Rp <?= number_format((float) $row['total_tagihan'], 0, ',', '.') ?></td>
+                                    <td>Rp <?= number_format((float) $row['total_bayar'], 0, ',', '.') ?></td>
+                                    <td><?= e(ucwords(str_replace('_', ' ', $row['status']))) ?></td>
                                 <?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
@@ -373,6 +403,5 @@ if ($tanggal_awal <= $tanggal_akhir) {
         </section>
     </div>
 </main>
-
 </body>
 </html>
